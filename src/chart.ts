@@ -73,6 +73,14 @@ const STYLE_TEXT = `
 .cschart-root{position:relative;width:100%;height:100%;overflow:hidden;user-select:none;-webkit-user-select:none;outline:none;overscroll-behavior:contain;cursor:crosshair}
 .cschart-root canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 .cschart-text{position:absolute;z-index:3;min-width:88px;padding:4px 6px;border:1px solid #3861fb;border-radius:4px;background:#0d1526;color:#e7eef8;font:12px ui-sans-serif,system-ui,sans-serif;outline:none}
+.cschart-drawbar{position:absolute;z-index:4;display:flex;align-items:center;gap:4px;height:30px;padding:0 6px;border:1px solid #1c2a44;border-radius:8px;background:#0d1526;box-shadow:0 10px 24px rgba(0,0,0,.35)}
+.cschart-drawbar[hidden]{display:none}
+.cschart-swatch,.cschart-picker{width:16px;height:16px;padding:0;border:1px solid rgba(255,255,255,.45);border-radius:50%;cursor:pointer;background:transparent}
+.cschart-swatch[aria-pressed="true"]{outline:2px solid #fff;outline-offset:1px}
+.cschart-picker{overflow:hidden;display:grid;position:relative}
+.cschart-picker input{position:absolute;inset:-6px;width:28px;height:28px;padding:0;border:0;background:transparent;cursor:pointer}
+.cschart-delete{width:22px;height:22px;margin-left:2px;border:0;border-radius:4px;background:transparent;color:#e7eef8;display:grid;place-items:center;cursor:pointer}
+.cschart-delete:hover{background:#f6465d;color:#fff}
 `;
 
 /**
@@ -116,6 +124,16 @@ export class Chart {
   private crosshair: { x: number; y: number } | null = null;
   private pointers = new Map<number, { x: number; y: number }>();
   private drag: Drag | null = null;
+  private drawbar: HTMLElement | null = null;
+  private edit: {
+    id: string;
+    /** Anchor index, or -1 when the whole drawing moves. */
+    index: number;
+    pointerId: number;
+    origin: Anchor[];
+    grab: Anchor;
+    active: boolean;
+  } | null = null;
   private pinch: Pinch | null = null;
   private suppressTap = false;
   private manual: { min: number; max: number } | null = null;
@@ -153,6 +171,7 @@ export class Chart {
   private readonly crosshairSubs = new Set<(param: CrosshairMoveParam) => void>();
   private readonly seriesSubs = new Set<(bar: BarData | null) => void>();
   private readonly rangeSubs = new Set<(range: LogicalRange) => void>();
+  private readonly toolSubs = new Set<(tool: Tool) => void>();
   private destroyed = false;
 
   constructor(container: HTMLElement | string, options?: ChartOptions) {
@@ -235,11 +254,13 @@ export class Chart {
   }
 
   setTool(tool: Tool): void {
+    const changed = this.tool !== tool;
     this.tool = tool;
     this.draft = null;
     this.options.crosshair.visible = tool !== 'cursor';
     this.root.style.cursor = tool === 'cursor' ? 'default' : 'crosshair';
     this.markDirty(LAYER_OVERLAY);
+    if (changed) this.emitTool();
   }
 
   /** Snap new drawing points to the nearest open, high, low, or close. */
@@ -274,7 +295,13 @@ export class Chart {
       if (!Number.isFinite(time) || !Number.isFinite(anchor.price)) return '';
       anchors.push({ time, price: anchor.price });
     }
-    const drawing: Drawing = { id: `d${this.drawSeq++}`, type: input.type, anchors, text: input.text };
+    const drawing: Drawing = {
+      id: `d${this.drawSeq++}`,
+      type: input.type,
+      anchors,
+      text: input.text,
+      color: input.color,
+    };
     this.drawings.push(drawing);
     this.markDirty(LAYER_DRAW | LAYER_OVERLAY);
     return drawing.id;
@@ -303,6 +330,8 @@ export class Chart {
       id: drawing.id,
       type: drawing.type,
       anchors: drawing.anchors.map((anchor) => ({ time: anchor.time, price: anchor.price })),
+      text: drawing.text,
+      color: drawing.color,
     }));
   }
 
@@ -420,6 +449,12 @@ export class Chart {
     return () => this.rangeSubs.delete(handler);
   }
 
+  /** Fires when the active tool changes, including after a drawing is finished. */
+  subscribeToolChange(handler: (tool: Tool) => void): () => void {
+    this.toolSubs.add(handler);
+    return () => this.toolSubs.delete(handler);
+  }
+
   applyOptions(patch: ChartOptions): void {
     if (patch.theme) {
       const next = resolveOptions({ theme: patch.theme });
@@ -499,6 +534,7 @@ export class Chart {
     this.crosshairSubs.clear();
     this.seriesSubs.clear();
     this.rangeSubs.clear();
+    this.toolSubs.clear();
   }
 
   private mount(): void {
@@ -521,6 +557,7 @@ export class Chart {
     this.layerList = [bg, series, draw, overlay];
     this.root.append(bg.canvas, series.canvas, draw.canvas, overlay.canvas);
     this.container.append(this.root);
+    this.mountDrawbar();
     this.attach();
     this.observer = new ResizeObserver(() => this.markDirty(LAYER_ALL));
     this.observer.observe(this.container);
@@ -572,6 +609,7 @@ export class Chart {
       return;
     }
     if (event.button !== 0 && event.button !== 1) return;
+    if (event.button === 0 && !this.isDrawingTool() && this.beginEdit(event.pointerId, point)) return;
     if (event.button === 0 && this.isDrawingTool()) {
       if (this.tool === 'brush') {
         const anchor = this.anchorFrom(point);
@@ -591,6 +629,10 @@ export class Chart {
   private onPointerMove = (event: PointerEvent): void => {
     const point = this.localPoint(event);
     if (this.pointers.has(event.pointerId)) this.pointers.set(event.pointerId, point);
+    if (this.edit && this.edit.pointerId === event.pointerId) {
+      this.applyEdit(point);
+      return;
+    }
     if (this.brush) {
       const anchor = this.anchorFrom(point);
       const last = this.brush[this.brush.length - 1];
@@ -627,10 +669,20 @@ export class Chart {
     const point = this.localPoint(event);
     this.pointers.delete(event.pointerId);
     if (this.pointers.size < 2) this.pinch = null;
+    if (this.edit && this.edit.pointerId === event.pointerId) {
+      this.edit = null;
+      this.root.style.cursor = this.tool === 'cursor' ? 'default' : 'crosshair';
+      this.markDirty(LAYER_DRAW | LAYER_OVERLAY);
+      return;
+    }
     if (this.brush && event.button === 0) {
-      if (this.brush.length >= 2) this.addDrawing({ type: 'brush', anchors: this.brush });
+      if (this.brush.length >= 2) {
+        const id = this.addDrawing({ type: 'brush', anchors: this.brush });
+        if (id) this.selectedId = id;
+      }
       this.brush = null;
       this.draft = null;
+      this.releaseTool();
       this.markDirty(LAYER_DRAW | LAYER_OVERLAY);
       return;
     }
@@ -673,6 +725,14 @@ export class Chart {
 
   private onDoubleClick = (event: MouseEvent): void => {
     event.preventDefault();
+    const point = this.localPoint(event);
+    const id = this.hitDrawing(point.x, point.y);
+    const drawing = id ? this.drawings.find((item) => item.id === id) : undefined;
+    if (drawing && (drawing.type === 'text' || drawing.type === 'note') && !this.drawingsLocked) {
+      this.selectedId = drawing.id;
+      this.editText(drawing.id);
+      return;
+    }
     this.fitContent();
   };
 
@@ -739,7 +799,83 @@ export class Chart {
   private commitDrawing(tool: DrawingTool, anchors: Anchor[]): void {
     const text = tool === 'text' ? 'Text' : tool === 'note' ? 'Note' : undefined;
     const id = this.addDrawing({ type: tool, anchors, text });
-    if (id && (tool === 'text' || tool === 'note')) this.editText(id);
+    if (!id) return;
+    this.selectedId = id;
+    if (tool === 'text' || tool === 'note') this.editText(id);
+    this.releaseTool();
+  }
+
+  /** One drawing per tool click. The next shape needs the tool chosen again. */
+  private releaseTool(): void {
+    if (!this.isDrawingTool()) return;
+    this.setTool('crosshair');
+  }
+
+  private beginEdit(pointerId: number, point: { x: number; y: number }): boolean {
+    if (this.drawingsLocked || !this.drawingsVisible) return false;
+    const handle = this.hitHandle(point.x, point.y);
+    const id = handle?.id ?? this.hitDrawing(point.x, point.y);
+    if (!id) return false;
+    const drawing = this.drawings.find((item) => item.id === id);
+    const grab = this.anchorFrom(point, false);
+    if (!drawing || !grab) return false;
+    this.selectedId = id;
+    this.edit = {
+      id,
+      index: handle && handle.id === id ? handle.index : -1,
+      pointerId,
+      origin: drawing.anchors.map((anchor) => ({ time: anchor.time, price: anchor.price })),
+      grab,
+      active: false,
+    };
+    this.markDirty(LAYER_DRAW | LAYER_OVERLAY);
+    return true;
+  }
+
+  private applyEdit(point: { x: number; y: number }): void {
+    const edit = this.edit;
+    if (!edit) return;
+    const drawing = this.drawings.find((item) => item.id === edit.id);
+    const next = this.anchorFrom(point, edit.index >= 0 && this.magnet);
+    if (!drawing || !next) return;
+    const dx = point.x - this.viewport.indexToX(timeToIndex(this.store.time, this.store.length, edit.grab.time));
+    const dy = point.y - this.viewport.priceToY(edit.grab.price);
+    if (!edit.active && Math.hypot(dx, dy) <= 4) return;
+    edit.active = true;
+    this.root.style.cursor = 'grabbing';
+    if (edit.index >= 0) {
+      const src = edit.origin[edit.index];
+      if (!src) return;
+      let time = next.time;
+      let price = next.price;
+      if (drawing.type === 'horizontal-line') time = src.time;
+      if (drawing.type === 'vertical-line') price = src.price;
+      drawing.anchors[edit.index] = { time, price };
+    } else {
+      const dTime = next.time - edit.grab.time;
+      const dPrice = next.price - edit.grab.price;
+      drawing.anchors = edit.origin.map((anchor) => ({ time: anchor.time + dTime, price: anchor.price + dPrice }));
+    }
+    this.markDirty(LAYER_DRAW | LAYER_OVERLAY);
+  }
+
+  private hitHandle(x: number, y: number): { id: string; index: number } | null {
+    if (!this.selectedId) return null;
+    const drawing = this.drawings.find((item) => item.id === this.selectedId);
+    if (!drawing) return null;
+    let nearest = -1;
+    let best = 8;
+    for (let i = 0; i < drawing.anchors.length; i++) {
+      const anchor = drawing.anchors[i]!;
+      const px = this.viewport.indexToX(timeToIndex(this.store.time, this.store.length, anchor.time));
+      const py = this.viewport.priceToY(anchor.price);
+      const dist = Math.hypot(px - x, py - y);
+      if (dist <= best) {
+        best = dist;
+        nearest = i;
+      }
+    }
+    return nearest < 0 ? null : { id: drawing.id, index: nearest };
   }
 
   private editText(id: string): void {
@@ -835,10 +971,10 @@ export class Chart {
     this.markDirty(LAYER_OVERLAY);
   }
 
-  private anchorFrom(point: { x: number; y: number }): Anchor | null {
+  private anchorFrom(point: { x: number; y: number }, snap = this.magnet): Anchor | null {
     if (this.store.length === 0 || !this.viewport.inCandlePane(point.x, point.y)) return null;
     const index = this.viewport.xToIndex(point.x);
-    if (this.magnet) {
+    if (snap) {
       const bar = Math.max(0, Math.min(this.store.length - 1, Math.round(index)));
       const price = this.viewport.yToPrice(point.y);
       const choices = [this.store.open[bar]!, this.store.high[bar]!, this.store.low[bar]!, this.store.close[bar]!];
@@ -1017,6 +1153,7 @@ export class Chart {
     this.dirty = 0;
     this.dataPaint = false;
     this.dataIndex = -1;
+    this.syncDrawbar();
     this.capturePainted();
     if (this.crosshairEmitPending) {
       this.crosshairEmitPending = false;
@@ -1266,6 +1403,101 @@ export class Chart {
     for (const handler of this.crosshairSubs) {
       try {
         handler(param);
+      } catch (error) {
+        console.error(error);
+      }
+    }
+  }
+
+  private mountDrawbar(): void {
+    const colors = ['#42a5f5', '#f6465d', '#0ecb81', '#f5c542', '#c084fc', '#e7eef8'];
+    const bar = document.createElement('div');
+    bar.className = 'cschart-drawbar';
+    bar.hidden = true;
+    const stop = (event: Event): void => event.stopPropagation();
+    bar.addEventListener('pointerdown', stop);
+    bar.addEventListener('pointerup', stop);
+    bar.addEventListener('keydown', stop);
+    const paint = (color: string): void => {
+      const drawing = this.drawings.find((item) => item.id === this.selectedId);
+      if (!drawing || this.drawingsLocked) return;
+      drawing.color = color;
+      this.markDirty(LAYER_DRAW);
+    };
+    for (const color of colors) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'cschart-swatch';
+      button.title = 'Color';
+      button.style.background = color;
+      button.dataset.color = color;
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        paint(color);
+      });
+      bar.append(button);
+    }
+    const picker = document.createElement('label');
+    picker.className = 'cschart-picker';
+    picker.title = 'Custom color';
+    picker.style.background = 'conic-gradient(#f6465d, #f5c542, #0ecb81, #42a5f5, #c084fc, #f6465d)';
+    const input = document.createElement('input');
+    input.type = 'color';
+    input.value = '#42a5f5';
+    input.addEventListener('input', () => paint(input.value));
+    picker.append(input);
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'cschart-delete';
+    remove.title = 'Delete';
+    remove.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16M9 7V5h6v2M7 7l1 13h8l1-13"/></svg>';
+    remove.addEventListener('click', (event) => {
+      event.stopPropagation();
+      if (this.selectedId) this.removeDrawing(this.selectedId);
+    });
+    bar.append(picker, remove);
+    this.root.append(bar);
+    this.drawbar = bar;
+  }
+
+  private syncDrawbar(): void {
+    const bar = this.drawbar;
+    if (!bar) return;
+    const drawing = this.selectedId && this.drawingsVisible && !this.drawingsLocked
+      ? this.drawings.find((item) => item.id === this.selectedId)
+      : undefined;
+    if (!drawing || drawing.anchors.length === 0) {
+      bar.hidden = true;
+      return;
+    }
+    bar.hidden = false;
+    const ink = (drawing.color || this.options.drawings.color).toLowerCase();
+    for (const button of bar.querySelectorAll<HTMLButtonElement>('.cschart-swatch')) {
+      button.setAttribute('aria-pressed', button.dataset.color === ink ? 'true' : 'false');
+    }
+    let x = drawing.anchors[0]!.time;
+    let y = Infinity;
+    let anchorX = 0;
+    for (const anchor of drawing.anchors) {
+      const py = this.viewport.priceToY(anchor.price);
+      if (py < y) {
+        y = py;
+        x = anchor.time;
+        anchorX = this.viewport.indexToX(timeToIndex(this.store.time, this.store.length, x));
+      }
+    }
+    const width = bar.offsetWidth || 168;
+    const left = Math.min(Math.max(this.viewport.plotLeft, anchorX - width / 2), this.viewport.plotRight - width);
+    let top = y - 38;
+    if (top < this.viewport.plotTop) top = Math.min(y + 14, this.viewport.candleBottom - 34);
+    bar.style.left = `${left}px`;
+    bar.style.top = `${top}px`;
+  }
+
+  private emitTool(): void {
+    for (const handler of this.toolSubs) {
+      try {
+        handler(this.tool);
       } catch (error) {
         console.error(error);
       }

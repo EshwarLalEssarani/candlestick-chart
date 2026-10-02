@@ -1,6 +1,6 @@
 {
-  "name": "candlestick-chart",
-  "version": "1.0.0",
+  "name": "@eshwarlal/candlestick-chart",
+  "version": "1.1.0",
   "description": "High-performance candlestick charting library. Canvas layers, no UI framework.",
   "author": "Eshwar Lal (https://github.com/EshwarLalEssarani)",
   "homepage": "https://github.com/EshwarLalEssarani/candlestick-chart#readme",

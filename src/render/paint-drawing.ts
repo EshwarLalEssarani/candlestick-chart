@@ -27,8 +27,9 @@ export function paintDrawing(
   selected: boolean,
   preview: boolean,
   text?: string,
+  ink?: string,
 ): void {
-  const color = selected ? scene.options.drawings.selectedColor : scene.options.drawings.color;
+  const color = ink || scene.options.drawings.color;
   ctx.lineWidth = selected ? 2 : 1.5;
   ctx.strokeStyle = color;
   ctx.fillStyle = color;
@@ -100,8 +101,13 @@ function bounds(scene: DrawHost): { left: number; top: number; right: number; bo
 
 function handle(ctx: Ctx, point: Point | undefined, color: string, selected: boolean): void {
   if (!selected || !point) return;
-  ctx.fillStyle = color;
-  ctx.fillRect(point.x - 3, point.y - 3, 6, 6);
+  ctx.save();
+  ctx.fillStyle = '#ffffff';
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1;
+  ctx.fillRect(point.x - 3.5, point.y - 3.5, 7, 7);
+  ctx.strokeRect(point.x - 3.5, point.y - 3.5, 7, 7);
+  ctx.restore();
 }
 
 function strokeH(
@@ -366,6 +372,23 @@ function paintPitchfork(ctx: Ctx, scene: DrawHost, points: Point[], selected: bo
   handle(ctx, c, color, selected);
 }
 
+function formatSpan(ms: number): string {
+  const abs = Math.abs(ms);
+  const minute = 60_000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+  if (abs < minute) return `${Math.max(1, Math.round(abs / 1000))}s`;
+  if (abs < hour) return `${Math.round(abs / minute)}m`;
+  if (abs < day) {
+    const hours = Math.floor(abs / hour);
+    const minutes = Math.round((abs % hour) / minute);
+    return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+  }
+  const days = Math.floor(abs / day);
+  const hours = Math.round((abs % day) / hour);
+  return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
+}
+
 function paintMeasure(ctx: Ctx, scene: DrawHost, anchors: readonly Anchor[], points: Point[], color: string): void {
   const a = anchors[0];
   const b = anchors[1];
@@ -376,13 +399,10 @@ function paintMeasure(ctx: Ctx, scene: DrawHost, anchors: readonly Anchor[], poi
   ctx.setLineDash([4, 3]);
   strokeSegment(ctx, p1, p2, false, color);
   ctx.restore();
-  const i1 = timeToIndex(scene.store.time, scene.store.length, a.time);
-  const i2 = timeToIndex(scene.store.time, scene.store.length, b.time);
-  const bars = Math.max(0, Math.round(Math.abs(i2 - i1)));
   const delta = b.price - a.price;
   const pct = a.price !== 0 ? (delta / Math.abs(a.price)) * 100 : 0;
   const sign = delta > 0 ? '+' : '';
-  const label = `${sign}${formatPrice(delta, scene.priceStep)} (${sign}${pct.toFixed(2)}%)   ${bars} bars`;
+  const label = `${sign}${formatPrice(delta, scene.priceStep)} (${sign}${pct.toFixed(2)}%)   ${formatSpan(b.time - a.time)}`;
   labelBox(ctx, (p1.x + p2.x) / 2, (p1.y + p2.y) / 2, label, color, scene);
 }
 

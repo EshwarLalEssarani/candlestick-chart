@@ -8,6 +8,22 @@ Zero-dependency candlestick chart for static pages and JavaScript apps. The rend
 
 Pan and zoom stay on the visible window. A binary search finds the first bar in view, and when several bars share a pixel they collapse into one column. Price range queries use 256-bar blocks, so a tick does not walk the whole series. If that tick does not move the scale, the grid and drawings are not repainted.
 
+## Install
+
+```bash
+npm install @eshwarlal/candlestick-chart
+```
+
+```ts
+import { create } from '@eshwarlal/candlestick-chart';
+```
+
+On a plain website:
+
+```html
+<script src="https://cdn.jsdelivr.net/npm/@eshwarlal/candlestick-chart/dist/candlestick-chart.min.js"></script>
+```
+
 ## Build
 
 ```bash
@@ -43,7 +59,7 @@ The demo is at [http://localhost:4173/demo/](http://localhost:4173/demo/). `npm 
 ## ESM
 
 ```ts
-import { create } from 'candlestick-chart';
+import { create } from '@eshwarlal/candlestick-chart';
 
 const chart = create(document.querySelector('#chart')!, {
   theme: 'dark',

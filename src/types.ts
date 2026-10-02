@@ -96,12 +96,15 @@ export interface Drawing {
   anchors: Anchor[];
   /** Label for text and note tools. */
   text?: string;
+  /** Stroke color. Omitted drawings use the theme color. */
+  color?: string;
 }
 
 export interface DrawingInput {
   type: DrawingTool;
   anchors: Anchor[];
   text?: string;
+  color?: string;
 }
 
 export interface LogicalRange {

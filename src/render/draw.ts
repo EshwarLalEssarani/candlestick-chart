@@ -231,7 +231,7 @@ export function drawDrawings(ctx: Ctx, scene: Scene): void {
   ctx.textAlign = 'left';
   for (const drawing of scene.drawings) {
     const selected = drawing.id === scene.selectedId;
-    paintDrawing(ctx, scene, drawing.anchors, drawing.type, selected, false, drawing.text);
+    paintDrawing(ctx, scene, drawing.anchors, drawing.type, selected, false, drawing.text, drawing.color);
   }
   ctx.restore();
 }

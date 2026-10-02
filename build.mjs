@@ -11,7 +11,7 @@ const shared = {
   target: 'es2020',
   platform: 'browser',
   legalComments: 'none',
-  banner: { js: '/*! Eshwar Lal — https://github.com/EshwarLalEssarani | CandlestickChart v1.0.0 | MIT */' },
+  banner: { js: '/*! Eshwar Lal — https://github.com/EshwarLalEssarani | CandlestickChart v1.1.0 | MIT */' },
 };
 
 await esbuild.build({
