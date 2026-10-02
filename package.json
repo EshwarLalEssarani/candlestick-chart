@@ -1,0 +1,45 @@
+{
+  "name": "candlestick-chart",
+  "version": "1.0.0",
+  "description": "High-performance candlestick charting library. Canvas layers, no UI framework.",
+  "author": "Eshwar Lal (https://github.com/EshwarLalEssarani)",
+  "homepage": "https://github.com/EshwarLalEssarani/candlestick-chart#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EshwarLalEssarani/candlestick-chart.git"
+  },
+  "bugs": {
+    "url": "https://github.com/EshwarLalEssarani/candlestick-chart/issues"
+  },
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "unpkg": "./dist/candlestick-chart.min.js",
+  "jsdelivr": "./dist/candlestick-chart.min.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node build.mjs && node scripts/test.mjs && node --test tests/package.test.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "demo": "node build.mjs && python3 -m http.server 4173"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "esbuild": "^0.25.9",
+    "typescript": "^5.9.2"
+  }
+}
